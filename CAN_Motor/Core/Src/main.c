@@ -43,9 +43,6 @@
  */
 #define CAN_CONTROL_ID              0x124
 
-#define SendID 						0x123
-#define SendData					0xAB
-
 /*
  * CAN ID 0x124 안에서 사용하는 데이터 정의
  */
@@ -119,33 +116,12 @@ void MX_FREERTOS_Init(void);
 
 void CAN_Filter_Config(void);
 
-void CAN_Send_StopAck(void);
 
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-void CAN_Send_StopAck(void)
-{
-    CAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[1];
-    uint32_t TxMailbox;
-
-    TxHeader.StdId = SendID;          // 0x123
-    TxHeader.IDE = CAN_ID_STD;
-    TxHeader.RTR = CAN_RTR_DATA;
-    TxHeader.DLC = 1;
-    TxHeader.TransmitGlobalTime = DISABLE;
-
-    TxData[0] = SendData;             // 0xAB
-
-    if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0)
-    {
-        HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
-    }
-}
 
 
 void CAN_Filter_Config(void)
@@ -204,12 +180,6 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
                 if (RxData[0] == CAN_DATA_STOP_CONVEYOR)
                 {
                     g_conveyor_Stop = 1;
-
-                    /*
-                     * 기존모터 정지 명령을 받았다는 것을
-                     * CAN ID 0x123, Data[0] = 0xAB로 송신
-                     */
-                    CAN_Send_StopAck();
                 }
                 else if (RxData[0] == CAN_DATA_RUN_MOTOR_A)
                 {
