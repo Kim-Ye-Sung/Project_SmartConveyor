@@ -1,0 +1,7 @@
+../Core/Src/main.c:69:5:main	1
+../Core/Src/main.c:140:6:SystemClock_Config	4
+../Core/Src/main.c:189:6:Servo_SetAngle	4
+../Core/Src/main.c:194:6:HAL_CAN_RxFifo0MsgPendingCallback	3
+../Core/Src/main.c:209:6:CAN_Send	1
+../Core/Src/main.c:232:6:HAL_TIM_PeriodElapsedCallback	2
+../Core/Src/main.c:248:6:Error_Handler	1

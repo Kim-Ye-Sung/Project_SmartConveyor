@@ -1,0 +1,393 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * File Name          : freertos.c
+  * Description        : Code for freertos applications
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "FreeRTOS.h"
+#include "task.h"
+#include "main.h"
+#include "cmsis_os.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN Variables */
+
+extern volatile uint8_t g_motorRun;
+
+/* USER CODE END Variables */
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for ConveyorTask */
+osThreadId_t ConveyorTaskHandle;
+const osThreadAttr_t ConveyorTask_attributes = {
+  .name = "ConveyorTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for EventTask */
+osThreadId_t EventTaskHandle;
+const osThreadAttr_t EventTask_attributes = {
+  .name = "EventTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for MotorBTask */
+osThreadId_t MotorBTaskHandle;
+const osThreadAttr_t MotorBTask_attributes = {
+  .name = "MotorBTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for MotorCTask */
+osThreadId_t MotorCTaskHandle;
+const osThreadAttr_t MotorCTask_attributes = {
+  .name = "MotorCTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for EventQueue */
+osMessageQueueId_t EventQueueHandle;
+const osMessageQueueAttr_t EventQueue_attributes = {
+  .name = "EventQueue"
+};
+/* Definitions for TrashForwardTimer */
+osTimerId_t TrashForwardTimerHandle;
+const osTimerAttr_t TrashForwardTimer_attributes = {
+  .name = "TrashForwardTimer"
+};
+/* Definitions for TrashBackwardTimer */
+osTimerId_t TrashBackwardTimerHandle;
+const osTimerAttr_t TrashBackwardTimer_attributes = {
+  .name = "TrashBackwardTimer"
+};
+/* Definitions for CheckTimer */
+osTimerId_t CheckTimerHandle;
+const osTimerAttr_t CheckTimer_attributes = {
+  .name = "CheckTimer"
+};
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+
+void StepMotor_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4);
+
+/* USER CODE END FunctionPrototypes */
+
+void StartDefaultTask(void *argument);
+void StartTask02(void *argument);
+void StartTask03(void *argument);
+void StartTask04(void *argument);
+void StartTask05(void *argument);
+void TrashForwardTimerCallback(void *argument);
+void TrashBackwardTimerCallback(void *argument);
+void CheckTimerCallback(void *argument);
+
+void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+/**
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
+void MX_FREERTOS_Init(void) {
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* Create the timer(s) */
+  /* creation of TrashForwardTimer */
+  TrashForwardTimerHandle = osTimerNew(TrashForwardTimerCallback, osTimerOnce, NULL, &TrashForwardTimer_attributes);
+
+  /* creation of TrashBackwardTimer */
+  TrashBackwardTimerHandle = osTimerNew(TrashBackwardTimerCallback, osTimerOnce, NULL, &TrashBackwardTimer_attributes);
+
+  /* creation of CheckTimer */
+  CheckTimerHandle = osTimerNew(CheckTimerCallback, osTimerOnce, NULL, &CheckTimer_attributes);
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  /* creation of EventQueue */
+  EventQueueHandle = osMessageQueueNew (8, sizeof(uint8_t), &EventQueue_attributes);
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* creation of ConveyorTask */
+  ConveyorTaskHandle = osThreadNew(StartTask02, NULL, &ConveyorTask_attributes);
+
+  /* creation of EventTask */
+  EventTaskHandle = osThreadNew(StartTask03, NULL, &EventTask_attributes);
+
+  /* creation of MotorBTask */
+  MotorBTaskHandle = osThreadNew(StartTask04, NULL, &MotorBTask_attributes);
+
+  /* creation of MotorCTask */
+  MotorCTaskHandle = osThreadNew(StartTask05, NULL, &MotorCTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+}
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+
+  for (;;)
+  {
+    osDelay(1);
+  }
+
+  /* USER CODE END StartDefaultTask */
+}
+
+/* USER CODE BEGIN Header_StartTask02 */
+/**
+  * @brief  Function implementing the ConveyorTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask02 */
+void StartTask02(void *argument)
+{
+  /* USER CODE BEGIN StartTask02 */
+
+//	  for (;;)
+//	  {
+//	    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+//	    osDelay(500);
+//	  }
+
+  for (;;)
+  {
+    if (g_motorRun == 0)
+    {
+      StepMotor_Write(0, 0, 0, 0);
+      osDelay(10);
+      continue;
+    }
+
+    StepMotor_Write(1, 0, 0, 0);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(1, 1, 0, 0);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(0, 1, 0, 0);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(0, 1, 1, 0);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(0, 0, 1, 0);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(0, 0, 1, 1);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(0, 0, 0, 1);
+    osDelay(3);
+
+    if (g_motorRun == 0)
+    {
+      continue;
+    }
+
+    StepMotor_Write(1, 0, 0, 1);
+    osDelay(3);
+  }
+
+  /* USER CODE END StartTask02 */
+}
+
+/* USER CODE BEGIN Header_StartTask03 */
+/**
+  * @brief  Function implementing the EventTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask03 */
+void StartTask03(void *argument)
+{
+  /* USER CODE BEGIN StartTask03 */
+
+  for (;;)
+  {
+    osDelay(1);
+  }
+
+  /* USER CODE END StartTask03 */
+}
+
+/* USER CODE BEGIN Header_StartTask04 */
+/**
+  * @brief  Function implementing the MotorBTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask04 */
+void StartTask04(void *argument)
+{
+  /* USER CODE BEGIN StartTask04 */
+
+  for (;;)
+  {
+    osDelay(1);
+  }
+
+  /* USER CODE END StartTask04 */
+}
+
+/* USER CODE BEGIN Header_StartTask05 */
+/**
+  * @brief  Function implementing the MotorCTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask05 */
+void StartTask05(void *argument)
+{
+  /* USER CODE BEGIN StartTask05 */
+
+  for (;;)
+  {
+    osDelay(1);
+  }
+
+  /* USER CODE END StartTask05 */
+}
+
+/* TrashForwardTimerCallback function */
+void TrashForwardTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN TrashForwardTimerCallback */
+
+  /* USER CODE END TrashForwardTimerCallback */
+}
+
+/* TrashBackwardTimerCallback function */
+void TrashBackwardTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN TrashBackwardTimerCallback */
+
+  /* USER CODE END TrashBackwardTimerCallback */
+}
+
+/* CheckTimerCallback function */
+void CheckTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN CheckTimerCallback */
+
+  /* USER CODE END CheckTimerCallback */
+}
+
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+
+void StepMotor_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, in1 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, in2 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, in3 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, in4 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* USER CODE END Application */
+

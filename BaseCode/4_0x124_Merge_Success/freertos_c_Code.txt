@@ -1,0 +1,723 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * File Name          : freertos.c
+  * Description        : Code for FreeRTOS applications
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "FreeRTOS.h"
+#include "task.h"
+#include "main.h"
+#include "cmsis_os.h"
+
+/* USER CODE BEGIN Includes */
+#include "can.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+typedef enum
+{
+    MOTOR_DIR_FORWARD = 0,
+    MOTOR_DIR_BACKWARD
+} MotorDirection;
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/*
+ * 모터A 90도 회전 설정
+ *
+ * 기존 코드에서 "추가 모터"라고 부르던 모터.
+ * PA8, PB10, PB4, PB5에 연결된 모터이다.
+ *
+ * 28BYJ-48 + ULN2003 기준으로 반스텝 구동 시
+ * 출력축 1바퀴를 약 4096스텝으로 보면,
+ * 90도는 약 1024스텝이다.
+ */
+#define MOTOR_A_90DEG_STEPS       1024
+
+/*
+ * 모터A는 기존 코드처럼 1ms 간격으로 움직인다.
+ */
+#define MOTOR_A_STEP_DELAY_MS     1
+
+/*
+ * 모터A가 90도 회전 후 멈춰있는 시간
+ */
+#define MOTOR_A_HOLD_TIME_MS      2000
+
+/*
+ * 추가 모터B 속도
+ *
+ * 기존 모터와 동일한 속도로 움직이기 위해 3ms 사용.
+ */
+#define MOTOR_B_STEP_DELAY_MS     3
+
+/*
+ * RxData[0] = 0x01 상황에서 송신할 CAN ID
+ */
+#define CAN_RESPONSE_ID           0x126
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN Variables */
+
+/*
+ * main.c에 있는 전역 변수들을 가져와서 사용한다.
+ */
+extern volatile uint8_t g_conveyor_Stop;
+
+extern volatile uint8_t g_motorA_Command;
+extern volatile uint8_t g_motorA_Busy;
+
+extern volatile uint8_t g_motorB_Run;
+
+/*
+ * main.c의 CAN 수신 콜백에서 1로 만든다.
+ * freertos.c의 StartDefaultTask에서 실제 CAN ID 0x126를 송신한다.
+ */
+extern volatile uint8_t g_send_126_Request;
+
+/* USER CODE END Variables */
+
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
+/* Definitions for ConveyorTask */
+osThreadId_t ConveyorTaskHandle;
+const osThreadAttr_t ConveyorTask_attributes = {
+  .name = "ConveyorTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
+/* Definitions for EventTask */
+osThreadId_t EventTaskHandle;
+const osThreadAttr_t EventTask_attributes = {
+  .name = "EventTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
+/* Definitions for MotorBTask */
+osThreadId_t MotorBTaskHandle;
+const osThreadAttr_t MotorBTask_attributes = {
+  .name = "MotorBTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
+/* Definitions for MotorCTask */
+osThreadId_t MotorCTaskHandle;
+const osThreadAttr_t MotorCTask_attributes = {
+  .name = "MotorCTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
+/* Definitions for EventQueue */
+osMessageQueueId_t EventQueueHandle;
+const osMessageQueueAttr_t EventQueue_attributes = {
+  .name = "EventQueue"
+};
+
+/* Definitions for TrashForwardTimer */
+osTimerId_t TrashForwardTimerHandle;
+const osTimerAttr_t TrashForwardTimer_attributes = {
+  .name = "TrashForwardTimer"
+};
+
+/* Definitions for TrashBackwardTimer */
+osTimerId_t TrashBackwardTimerHandle;
+const osTimerAttr_t TrashBackwardTimer_attributes = {
+  .name = "TrashBackwardTimer"
+};
+
+/* Definitions for CheckTimer */
+osTimerId_t CheckTimerHandle;
+const osTimerAttr_t CheckTimer_attributes = {
+  .name = "CheckTimer"
+};
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+
+/*
+ * 기존 모터
+ *
+ * PA0 → IN1
+ * PA1 → IN2
+ * PA4 → IN3
+ * PB0 → IN4
+ */
+void ConveyorMotor_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4);
+void ConveyorMotor_OneCycle(void);
+
+/*
+ * 모터A
+ *
+ * 기존 코드에서 "추가 모터"라고 부르던 모터
+ *
+ * PA8  → IN1
+ * PB10 → IN2
+ * PB4  → IN3
+ * PB5  → IN4
+ */
+void MotorA_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4);
+void MotorA_Step(uint8_t stepIndex);
+void MotorA_RotateSteps(uint16_t steps, MotorDirection direction, uint32_t delayMs);
+
+/*
+ * 추가 모터B
+ *
+ * PA7 → IN1
+ * PB6 → IN2
+ * PC7 → IN3
+ * PA9 → IN4
+ */
+void MotorB_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4);
+void MotorB_OneCycle(void);
+
+/* USER CODE END FunctionPrototypes */
+
+void StartDefaultTask(void *argument);
+void StartTask02(void *argument);
+void StartTask03(void *argument);
+void StartTask04(void *argument);
+void StartTask05(void *argument);
+void TrashForwardTimerCallback(void *argument);
+void TrashBackwardTimerCallback(void *argument);
+void CheckTimerCallback(void *argument);
+
+void MX_FREERTOS_Init(void);
+
+/**
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
+void MX_FREERTOS_Init(void)
+{
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* Create the timer(s) */
+  TrashForwardTimerHandle = osTimerNew(TrashForwardTimerCallback, osTimerOnce, NULL, &TrashForwardTimer_attributes);
+  TrashBackwardTimerHandle = osTimerNew(TrashBackwardTimerCallback, osTimerOnce, NULL, &TrashBackwardTimer_attributes);
+  CheckTimerHandle = osTimerNew(CheckTimerCallback, osTimerOnce, NULL, &CheckTimer_attributes);
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+
+  /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  EventQueueHandle = osMessageQueueNew(8, sizeof(uint8_t), &EventQueue_attributes);
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  ConveyorTaskHandle = osThreadNew(StartTask02, NULL, &ConveyorTask_attributes);
+  EventTaskHandle = osThreadNew(StartTask03, NULL, &EventTask_attributes);
+  MotorBTaskHandle = osThreadNew(StartTask04, NULL, &MotorBTask_attributes);
+  MotorCTaskHandle = osThreadNew(StartTask05, NULL, &MotorCTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+
+  /* USER CODE END RTOS_EVENTS */
+}
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+
+  CAN_TxHeaderTypeDef TxHeader;
+  uint8_t TxData[8] = {0};
+  uint32_t TxMailbox;
+
+  /*
+   * RxData[0] = 0x01 상황에서 송신할 CAN 메시지 설정
+   *
+   * 송신 ID: 0x126
+   * 데이터 길이: 1바이트
+   * 데이터 값: 0x01
+   */
+  TxHeader.StdId = CAN_RESPONSE_ID;
+  TxHeader.IDE = CAN_ID_STD;
+  TxHeader.RTR = CAN_RTR_DATA;
+  TxHeader.DLC = 0;
+  TxHeader.TransmitGlobalTime = DISABLE;
+
+  for (;;)
+  {
+    /*
+     * main.c의 CAN 수신 콜백에서
+     * RxData[0] == 0x01 상황이 발생하면
+     * g_send_126_Request가 1이 된다.
+     */
+    if (g_send_126_Request == 1)
+    {
+      /*
+       * 중복 송신 방지를 위해 먼저 0으로 내린다.
+       */
+      g_send_126_Request = 0;
+
+      /*
+       * CAN 송신 메일박스가 비어 있으면 ID 0x126 송신
+       */
+      if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0)
+      {
+        if (HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox) != HAL_OK)
+        {
+          /*
+           * 송신 실패 시 여기서는 멈추지 않는다.
+           * 필요하면 LED 토글이나 에러 플래그를 추가할 수 있다.
+           */
+        }
+      }
+    }
+
+    osDelay(1);
+  }
+
+  /* USER CODE END StartDefaultTask */
+}
+
+/* USER CODE BEGIN Header_StartTask02 */
+/**
+  * @brief  Function implementing the ConveyorTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask02 */
+void StartTask02(void *argument)
+{
+  /* USER CODE BEGIN StartTask02 */
+
+  /*
+   * 기존 모터 담당 Task
+   *
+   * PA0, PA1, PA4, PB0에 연결된 기존 스텝모터를 계속 회전시킨다.
+   *
+   * CAN ID 0x124, Data[0] = 0xAA 수신 시:
+   * 기존 모터 정지
+   *
+   * RxData[0] = 0x01 수신 시:
+   * 기존 모터 다시 회전
+   */
+
+  ConveyorMotor_Write(0, 0, 0, 0);
+
+  for (;;)
+  {
+    if (g_conveyor_Stop == 1)
+    {
+      ConveyorMotor_Write(0, 0, 0, 0);
+      osDelay(10);
+      continue;
+    }
+
+    ConveyorMotor_OneCycle();
+  }
+
+  /* USER CODE END StartTask02 */
+}
+
+/* USER CODE BEGIN Header_StartTask03 */
+/**
+  * @brief  Function implementing the EventTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask03 */
+void StartTask03(void *argument)
+{
+  /* USER CODE BEGIN StartTask03 */
+
+  for (;;)
+  {
+    osDelay(1);
+  }
+
+  /* USER CODE END StartTask03 */
+}
+
+/* USER CODE BEGIN Header_StartTask04 */
+/**
+  * @brief  Function implementing the MotorBTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask04 */
+void StartTask04(void *argument)
+{
+  /* USER CODE BEGIN StartTask04 */
+
+  /*
+   * 추가 모터B 담당 Task
+   *
+   * PA7, PB6, PC7, PA9에 연결된 스텝모터 제어.
+   *
+   * 보드 시작 시:
+   * 정지 상태
+   *
+   * RxData[0] = 0x02 수신 시:
+   * 계속 회전 시작
+   *
+   * 속도:
+   * 기존 모터와 동일하게 3ms 반스텝 구동
+   */
+
+  MotorB_Write(0, 0, 0, 0);
+
+  for (;;)
+  {
+    if (g_motorB_Run == 1)
+    {
+      MotorB_OneCycle();
+    }
+    else
+    {
+      MotorB_Write(0, 0, 0, 0);
+      osDelay(10);
+    }
+  }
+
+  /* USER CODE END StartTask04 */
+}
+
+/* USER CODE BEGIN Header_StartTask05 */
+/**
+  * @brief  Function implementing the MotorCTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTask05 */
+void StartTask05(void *argument)
+{
+  /* USER CODE BEGIN StartTask05 */
+
+  /*
+   * 모터A 담당 Task
+   *
+   * 기존 코드에서 "추가 모터"라고 부르던 모터이다.
+   *
+   * PA8, PB10, PB4, PB5에 연결된 스텝모터 제어.
+   *
+   * CAN ID 0x124, Data[0] = 0xAC 수신 시:
+   * 1. 90도 정방향 회전
+   * 2. 2초 정지
+   * 3. 90도 역방향 회전해서 원위치 복귀
+   *
+   * 동작 중에는 g_motorA_Busy = 1이므로,
+   * main.c의 CAN 콜백에서 추가 0xAC를 무시한다.
+   */
+
+  MotorA_Write(0, 0, 0, 0);
+
+  for (;;)
+  {
+    if (g_motorA_Command == 1)
+    {
+      g_motorA_Command = 0;
+      g_motorA_Busy = 1;
+
+      /*
+       * 약 90도 정방향 회전
+       */
+      MotorA_RotateSteps(MOTOR_A_90DEG_STEPS, MOTOR_DIR_FORWARD, MOTOR_A_STEP_DELAY_MS);
+
+      /*
+       * 2초 정지
+       *
+       * 이때 마지막 코일 상태를 유지하므로
+       * 위치를 잡고 있는 상태가 된다.
+       */
+      osDelay(MOTOR_A_HOLD_TIME_MS);
+
+      /*
+       * 반대 방향으로 돌아와 원위치 복귀
+       */
+      MotorA_RotateSteps(MOTOR_A_90DEG_STEPS, MOTOR_DIR_BACKWARD, MOTOR_A_STEP_DELAY_MS);
+
+      /*
+       * 복귀 후 코일 OFF
+       */
+      MotorA_Write(0, 0, 0, 0);
+
+      g_motorA_Busy = 0;
+    }
+
+    osDelay(1);
+  }
+
+  /* USER CODE END StartTask05 */
+}
+
+/* TrashForwardTimerCallback function */
+void TrashForwardTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN TrashForwardTimerCallback */
+
+  /* USER CODE END TrashForwardTimerCallback */
+}
+
+/* TrashBackwardTimerCallback function */
+void TrashBackwardTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN TrashBackwardTimerCallback */
+
+  /* USER CODE END TrashBackwardTimerCallback */
+}
+
+/* CheckTimerCallback function */
+void CheckTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN CheckTimerCallback */
+
+  /* USER CODE END CheckTimerCallback */
+}
+
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+
+/*
+ * 기존 모터 출력
+ *
+ * 기존 모터 연결:
+ * PA0 → IN1
+ * PA1 → IN2
+ * PA4 → IN3
+ * PB0 → IN4
+ */
+void ConveyorMotor_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, in1 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, in2 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, in3 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, in4 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/*
+ * 기존 모터 1사이클 회전
+ *
+ * 반스텝 8단계 구동
+ * 각 단계마다 3ms delay
+ */
+void ConveyorMotor_OneCycle(void)
+{
+  ConveyorMotor_Write(1, 0, 0, 0);
+  osDelay(3);
+
+  ConveyorMotor_Write(1, 1, 0, 0);
+  osDelay(3);
+
+  ConveyorMotor_Write(0, 1, 0, 0);
+  osDelay(3);
+
+  ConveyorMotor_Write(0, 1, 1, 0);
+  osDelay(3);
+
+  ConveyorMotor_Write(0, 0, 1, 0);
+  osDelay(3);
+
+  ConveyorMotor_Write(0, 0, 1, 1);
+  osDelay(3);
+
+  ConveyorMotor_Write(0, 0, 0, 1);
+  osDelay(3);
+
+  ConveyorMotor_Write(1, 0, 0, 1);
+  osDelay(3);
+}
+
+/*
+ * 모터A 출력
+ *
+ * 기존 코드에서 "추가 모터"라고 부르던 모터
+ *
+ * 모터A 연결:
+ * PA8  → IN1
+ * PB10 → IN2
+ * PB4  → IN3
+ * PB5  → IN4
+ */
+void MotorA_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8,  in1 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, in2 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  in3 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  in4 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/*
+ * 모터A의 한 스텝 출력
+ */
+void MotorA_Step(uint8_t stepIndex)
+{
+  switch (stepIndex)
+  {
+    case 0:
+      MotorA_Write(1, 0, 0, 0);
+      break;
+
+    case 1:
+      MotorA_Write(1, 1, 0, 0);
+      break;
+
+    case 2:
+      MotorA_Write(0, 1, 0, 0);
+      break;
+
+    case 3:
+      MotorA_Write(0, 1, 1, 0);
+      break;
+
+    case 4:
+      MotorA_Write(0, 0, 1, 0);
+      break;
+
+    case 5:
+      MotorA_Write(0, 0, 1, 1);
+      break;
+
+    case 6:
+      MotorA_Write(0, 0, 0, 1);
+      break;
+
+    case 7:
+      MotorA_Write(1, 0, 0, 1);
+      break;
+
+    default:
+      MotorA_Write(0, 0, 0, 0);
+      break;
+  }
+}
+
+/*
+ * 모터A를 원하는 스텝 수만큼 회전
+ */
+void MotorA_RotateSteps(uint16_t steps, MotorDirection direction, uint32_t delayMs)
+{
+  uint16_t i;
+
+  for (i = 0; i < steps; i++)
+  {
+    uint8_t stepIndex;
+
+    if (direction == MOTOR_DIR_FORWARD)
+    {
+      stepIndex = i % 8;
+    }
+    else
+    {
+      stepIndex = 7 - (i % 8);
+    }
+
+    MotorA_Step(stepIndex);
+    osDelay(delayMs);
+  }
+}
+
+/*
+ * 추가 모터B 출력
+ *
+ * 추가 모터B 연결:
+ * PA7 → IN1
+ * PB6 → IN2
+ * PC7 → IN3
+ * PA9 → IN4
+ */
+void MotorB_Write(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, in1 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, in2 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, in3 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, in4 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/*
+ * 추가 모터B 1사이클 회전
+ *
+ * 기존 모터와 동일한 반스텝 8단계 구동.
+ * 속도도 기존 모터와 동일하게 3ms delay를 사용한다.
+ */
+void MotorB_OneCycle(void)
+{
+  MotorB_Write(1, 0, 0, 0);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(1, 1, 0, 0);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(0, 1, 0, 0);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(0, 1, 1, 0);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(0, 0, 1, 0);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(0, 0, 1, 1);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(0, 0, 0, 1);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+
+  MotorB_Write(1, 0, 0, 1);
+  osDelay(MOTOR_B_STEP_DELAY_MS);
+}
+
+/* USER CODE END Application */
