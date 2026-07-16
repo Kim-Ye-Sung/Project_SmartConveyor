@@ -30,8 +30,8 @@
 
 ### 실행 영상
 
-- [전체 시스템 실행 영상](https://www.youtube.com/watch?v=rKBWvczrMPI)
-- [카메라 QR 인식 영상](https://www.youtube.com/watch?v=zW4IsblBJ2E)
+- [전체 시스템 실행 영상](https://youtu.be/rKBWvczrMPI)
+- [카메라 QR 인식 영상](https://youtu.be/zW4IsblBJ2E)
 
 ---
 
