@@ -30,8 +30,8 @@
 
 ### 실행 영상
 
-- [전체 시스템 실행 영상] - `영상 용량이 큰 관계로 문제 해결 후, 업로드 예정`
-- [카메라 QR 인식 영상] - `영상 용량이 큰 관계로 문제 해결 후, 업로드 예정`
+- [전체 시스템 실행 영상](https://www.youtube.com/watch?v=rKBWvczrMPI)
+- [카메라 QR 인식 영상](https://www.youtube.com/watch?v=zW4IsblBJ2E)
 
 ---
 
